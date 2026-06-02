@@ -18,6 +18,75 @@
 	let showCalendar = $state(false);
 	let showForm = $state(false);
 
+	// ── Champs du formulaire de contact ───────────────────────────────────────
+	let civilite = $state('');
+	let prenom = $state('');
+	let nom = $state('');
+	let tel = $state('');
+	let email = $state('');
+	let commentaires = $state('');
+	let saveData = $state(false);
+	let termsAccepted = $state(false);
+
+	// ── Disponibilité en temps réel ───────────────────────────────────────────
+	type Availability = {
+		lunch_remaining: number;
+		dinner_remaining: number;
+		lunch_available: boolean;
+		dinner_available: boolean;
+	};
+
+	let availability = $state<Availability | null>(null);
+
+	// Re-fetch quand la date change
+	$effect(() => {
+		const dateStr = dateValue.toString();
+		let annule = false;
+
+		fetch(`http://localhost:8000/availability/${dateStr}`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then((data) => {
+				if (!annule) availability = data;
+			})
+			.catch(() => {
+				if (!annule) availability = null;
+			});
+
+		return () => {
+			annule = true;
+		};
+	});
+
+	// Réinitialise le créneau si la dispo ne permet plus la taille du groupe
+	$effect(() => {
+		if (selectedHoraire && availability) {
+			const remaining = dejeuner.includes(selectedHoraire)
+				? availability.lunch_remaining
+				: availability.dinner_remaining;
+			if (remaining < nombreCouverts) selectedHoraire = '';
+		}
+	});
+
+	// Créneau indispo = places restantes < couverts souhaités
+	function isSlotDisabled(slot: string): boolean {
+		if (!availability) return false;
+		const remaining = dejeuner.includes(slot)
+			? availability.lunch_remaining
+			: availability.dinner_remaining;
+		return remaining < nombreCouverts;
+	}
+
+	// ── État de la soumission ─────────────────────────────────────────────────
+	let submitting = $state(false);
+	let submitDone = $state(false);
+	let errorMsg = $state('');
+
+	const CIVILITY_MAP: Record<string, string> = {
+		madame: 'Madame',
+		monsieur: 'Monsieur',
+		mx: 'Mx.'
+	};
+
 	function formatDate(date: typeof dateValue) {
 		return date.toDate(getLocalTimeZone()).toLocaleDateString('fr-FR', {
 			weekday: 'short',
@@ -25,16 +94,71 @@
 			month: 'short'
 		});
 	}
+
+	async function submit() {
+		errorMsg = '';
+		if (!civilite || !prenom || !nom || !tel || !email) {
+			errorMsg = 'Veuillez remplir tous les champs obligatoires.';
+			return;
+		}
+		if (!selectedHoraire) {
+			errorMsg = 'Veuillez sélectionner un horaire.';
+			return;
+		}
+		if (!termsAccepted) {
+			errorMsg = "Vous devez accepter les conditions générales d'utilisation.";
+			return;
+		}
+
+		const meal_period = dejeuner.includes(selectedHoraire) ? 'lunch' : 'dinner';
+
+		submitting = true;
+		try {
+			const res = await fetch('http://localhost:8000/reservations/', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					party_size: nombreCouverts,
+					date: dateValue.toString(),
+					time_slot: selectedHoraire,
+					meal_period,
+					civility: CIVILITY_MAP[civilite],
+					first_name: prenom,
+					last_name: nom,
+					phone: tel,
+					email,
+					special_requests: commentaires || null,
+					save_data_consent: saveData,
+					terms_accepted: termsAccepted
+				})
+			});
+
+			if (res.ok) {
+				submitDone = true;
+			} else {
+				const data = await res.json().catch(() => ({}));
+				errorMsg = data.detail ?? 'Une erreur est survenue.';
+			}
+		} catch {
+			errorMsg = "Impossible de joindre le serveur. Vérifiez que l'API est démarrée.";
+		} finally {
+			submitting = false;
+		}
+	}
 </script>
 
-<div class="reservation">
+<section id="reservation" class="reservation-section">
+	<div class="section-head">
+		<span class="label">Réservation</span>
+		<h2>Réserver une table</h2>
+		<p class="intro">
+			Notre équipe vous accueille du mardi au dimanche. Réservez directement en ligne pour garantir
+			votre place.
+		</p>
+	</div>
+
 	<div class="accordion-container">
 		{#if !showForm}
-			<p>
-				Nous tenons à vous remercier de l'intérêt porté à notre restaurant. Afin de vous garantir la
-				meilleure expérience possible, nous vous invitons à réserver votre table ci-dessous. Notre
-				équipe mettra tout en œuvre pour que votre moment chez nous soit inoubliable.
-			</p>
 			<Accordion.Root type="single">
 				<Accordion.Item value="couverts">
 					<Accordion.Header>
@@ -84,7 +208,7 @@
 									onclick={() => (showCalendar = !showCalendar)}
 								>
 									<CalendarBlank size="22px" />
-									<span>Autre</span>
+									<span>Autre date</span>
 								</button>
 							</div>
 
@@ -161,10 +285,13 @@
 										<button
 											class="horaire-btn"
 											class:active={selectedHoraire === h}
+											class:indispo={isSlotDisabled(h)}
+											disabled={isSlotDisabled(h)}
 											onclick={() => (selectedHoraire = h)}
 										>
-											<span class="dot"></span>
+											<span class="dot" class:dot-complet={isSlotDisabled(h)}></span>
 											{h}
+											{#if isSlotDisabled(h)}<span class="tag-complet">complet</span>{/if}
 										</button>
 									{/each}
 								</div>
@@ -176,10 +303,13 @@
 										<button
 											class="horaire-btn"
 											class:active={selectedHoraire === h}
+											class:indispo={isSlotDisabled(h)}
+											disabled={isSlotDisabled(h)}
 											onclick={() => (selectedHoraire = h)}
 										>
-											<span class="dot"></span>
+											<span class="dot" class:dot-complet={isSlotDisabled(h)}></span>
 											{h}
+											{#if isSlotDisabled(h)}<span class="tag-complet">complet</span>{/if}
 										</button>
 									{/each}
 								</div>
@@ -205,105 +335,173 @@
 					<div class="recap-item"><Clock size="18px" /><span>{selectedHoraire || '—'}</span></div>
 					<div class="recap-item">
 						<MapPin size="18px" />
-						<div class="recap-location">
-							<span class="recap-location-name">SAIGON</span>
-							<span class="recap-location-addr">11 Rue Raymond Losserand, 75014 Paris</span>
-						</div>
+						<span class="recap-location-name">SAVORA</span>
 					</div>
 				</div>
 			</div>
 
-			<div class="form-scroll">
-				<div class="contact-header">
-					<button class="back-btn" onclick={() => (showForm = false)}>
-						<CaretLeft size="18px" />
+			{#if submitDone}
+				<div class="success-block">
+					<span class="success-icon">✓</span>
+					<h3>Réservation envoyée !</h3>
+					<p>
+						Nous avons bien reçu votre demande pour le <strong>{formatDate(dateValue)}</strong> à
+						<strong>{selectedHoraire}</strong>.<br />
+						Un email de confirmation vous sera adressé dans les plus brefs délais.
+					</p>
+					<button
+						class="reserver-btn"
+						onclick={() => {
+							submitDone = false;
+							showForm = false;
+							civilite = '';
+							prenom = '';
+							nom = '';
+							tel = '';
+							email = '';
+							commentaires = '';
+							saveData = false;
+							termsAccepted = false;
+							selectedHoraire = '';
+						}}
+					>
+						Nouvelle réservation
 					</button>
-					<span class="contact-title">Contact</span>
 				</div>
-
-				<div class="form">
-					<fieldset class="field-group field-group-fieldset">
-						<legend class="field-label">Civilité</legend>
-						<div class="radio-group">
-							<label class="radio-label"
-								><input type="radio" name="civilite" value="madame" /> Madame</label
-							>
-							<label class="radio-label"
-								><input type="radio" name="civilite" value="monsieur" /> Monsieur</label
-							>
-							<label class="radio-label"
-								><input type="radio" name="civilite" value="mx" /> Mx.</label
-							>
-						</div>
-					</fieldset>
-
-					<div class="field-row">
-						<div class="field-group">
-							<label class="field-label" for="prenom">Prénom</label>
-							<input id="prenom" type="text" class="field-input" />
-						</div>
-						<div class="field-group">
-							<label class="field-label" for="nom">Nom</label>
-							<input id="nom" type="text" class="field-input" />
-						</div>
+			{:else}
+				<div class="form-scroll">
+					<div class="contact-header">
+						<button class="back-btn" onclick={() => (showForm = false)}>
+							<CaretLeft size="18px" />
+						</button>
+						<span class="contact-title">Contact</span>
 					</div>
 
-					<div class="field-row">
-						<div class="field-group">
-							<label class="field-label" for="tel">Téléphone</label>
-							<div class="phone-input">
-								<span class="phone-flag">🇫🇷 +33</span>
-								<input
-									id="tel"
-									type="tel"
-									class="field-input phone-field"
-									placeholder="6 12 34 56 78"
-								/>
+					<div class="form">
+						<fieldset class="field-group field-group-fieldset">
+							<legend class="field-label">Civilité</legend>
+							<div class="radio-group">
+								<label class="radio-label"
+									><input type="radio" name="civilite" value="madame" bind:group={civilite} /> Madame</label
+								>
+								<label class="radio-label"
+									><input type="radio" name="civilite" value="monsieur" bind:group={civilite} /> Monsieur</label
+								>
+								<label class="radio-label"
+									><input type="radio" name="civilite" value="mx" bind:group={civilite} /> Mx.</label
+								>
+							</div>
+						</fieldset>
+
+						<div class="field-row">
+							<div class="field-group">
+								<label class="field-label" for="prenom">Prénom</label>
+								<input id="prenom" type="text" class="field-input" bind:value={prenom} />
+							</div>
+							<div class="field-group">
+								<label class="field-label" for="nom">Nom</label>
+								<input id="nom" type="text" class="field-input" bind:value={nom} />
 							</div>
 						</div>
-						<div class="field-group">
-							<label class="field-label" for="email">Email</label>
-							<input id="email" type="email" class="field-input" />
+
+						<div class="field-row">
+							<div class="field-group">
+								<label class="field-label" for="tel">Téléphone</label>
+								<div class="phone-input">
+									<span class="phone-flag">🇫🇷 +33</span>
+									<input
+										id="tel"
+										type="tel"
+										class="field-input phone-field"
+										placeholder="6 12 34 56 78"
+										bind:value={tel}
+									/>
+								</div>
+							</div>
+							<div class="field-group">
+								<label class="field-label" for="email">Email</label>
+								<input id="email" type="email" class="field-input" bind:value={email} />
+							</div>
 						</div>
-					</div>
 
-					<div class="field-group">
-						<label class="field-label" for="commentaires">
-							Commentaires, préférences ou restrictions alimentaires
-							<span class="facultatif">(facultatif)</span>
-						</label>
-						<textarea id="commentaires" class="field-textarea" rows="3"></textarea>
-					</div>
+						<div class="field-group">
+							<label class="field-label" for="commentaires">
+								Commentaires, préférences ou restrictions alimentaires
+								<span class="facultatif">(facultatif)</span>
+							</label>
+							<textarea id="commentaires" class="field-textarea" rows="3" bind:value={commentaires}
+							></textarea>
+						</div>
 
-					<div class="checkboxes">
-						<label class="checkbox-label"
-							><input type="checkbox" /> Sauvegardez les informations pour mes prochaines réservations.</label
-						>
-						<label class="checkbox-label"
-							><input type="checkbox" /> J'accepte les conditions générales d'utilisation du
-							service. <span class="required">*</span></label
-						>
-					</div>
+						<div class="checkboxes">
+							<label class="checkbox-label"
+								><input type="checkbox" bind:checked={saveData} /> Sauvegardez les informations pour
+								mes prochaines réservations.</label
+							>
+							<label class="checkbox-label"
+								><input type="checkbox" bind:checked={termsAccepted} /> J'accepte les conditions
+								générales d'utilisation du service. <span class="required">*</span></label
+							>
+						</div>
 
-					<button class="submit-btn">Réserver</button>
+						{#if errorMsg}
+							<p class="error-msg">{errorMsg}</p>
+						{/if}
+
+						<button class="submit-btn" onclick={submit} disabled={submitting}>
+							{submitting ? 'Envoi en cours…' : 'Confirmer la réservation'}
+						</button>
+					</div>
 				</div>
-			</div>
+			{/if}
 		{/if}
 	</div>
-</div>
+</section>
 
 <style>
-	.reservation {
+	/* ── Section wrapper ─────────────────────────────────────────── */
+	.reservation-section {
+		background-color: #fbf0da;
+		padding: 7rem 2rem 7rem;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		background-color: #fbf0da;
 	}
 
-	p {
+	.section-head {
 		text-align: center;
+		margin-bottom: 3rem;
+		max-width: 520px;
 	}
 
+	.label {
+		display: inline-block;
+		font-size: 0.6875rem;
+		letter-spacing: 0.22em;
+		text-transform: uppercase;
+		color: #7f1d1d;
+		margin-bottom: 1.25rem;
+		font-family: 'Aeonik', sans-serif;
+	}
+
+	h2 {
+		font-family: 'Britney', sans-serif;
+		font-size: clamp(2.25rem, 4vw, 3.5rem);
+		font-weight: 400;
+		color: #1e1005;
+		margin: 0 0 1.25rem;
+		line-height: 1.1;
+	}
+
+	.intro {
+		font-size: 0.9375rem;
+		color: #5a4a3a;
+		font-family: 'Aeonik', sans-serif;
+		line-height: 1.7;
+		margin: 0;
+	}
+
+	/* ── Card ─────────────────────────────────────────────────────── */
 	.accordion-container {
 		display: flex;
 		flex-direction: column;
@@ -311,12 +509,12 @@
 		height: 630px;
 		background-color: white;
 		border-radius: 0.75rem;
-		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
-		margin-top: 1.5rem;
+		box-shadow: 0 2px 24px rgba(30, 16, 5, 0.1);
 		overflow: hidden;
 		box-sizing: border-box;
 	}
 
+	/* ── Accordion ────────────────────────────────────────────────── */
 	:global([data-accordion-root]) {
 		width: 100%;
 		padding: 0 8px;
@@ -345,6 +543,8 @@
 		user-select: none;
 		border-radius: 5px;
 		transition: background-color 150ms;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.trigger-label {
@@ -373,7 +573,7 @@
 	}
 
 	:global([data-accordion-trigger]:hover) {
-		background-color: #f3f4f6;
+		background-color: #f5ede0;
 	}
 
 	:global([data-accordion-content]) {
@@ -400,6 +600,7 @@
 		}
 	}
 
+	/* ── Couverts ─────────────────────────────────────────────────── */
 	.couverts-buttons {
 		display: flex;
 		justify-content: center;
@@ -417,21 +618,22 @@
 		background-color: white;
 		cursor: pointer;
 		transition: all 150ms;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.couvert-btn:hover {
-		border-color: black;
-		background-color: black;
-		color: white;
+		border-color: #1e1005;
+		background-color: #f5ede0;
 	}
 
 	.couvert-btn.active {
-		border-color: black;
-		background-color: black;
-		color: white;
+		border-color: #1e1005;
+		background-color: #1e1005;
+		color: #fbf0da;
 	}
 
-	/* Date */
+	/* ── Date ─────────────────────────────────────────────────────── */
 	.date-content {
 		padding: 1rem 0 1.25rem;
 		display: flex;
@@ -459,20 +661,22 @@
 		font-weight: 500;
 		cursor: pointer;
 		transition: all 150ms;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.date-preset-btn:hover {
-		border-color: black;
-		background-color: black;
-		color: white;
+		border-color: #1e1005;
+		background-color: #f5ede0;
 	}
 
 	.date-preset-btn.active {
-		border-color: black;
-		background-color: black;
-		color: white;
+		border-color: #1e1005;
+		background-color: #1e1005;
+		color: #fbf0da;
 	}
 
+	/* ── Horaires ─────────────────────────────────────────────────── */
 	.horaires-content {
 		display: flex;
 		flex-direction: column;
@@ -497,15 +701,6 @@
 		border-radius: 99px;
 	}
 
-	.horaires-content::-webkit-scrollbar-button:start:decrement,
-	.horaires-content::-webkit-scrollbar-button:end:increment,
-	.horaires-content::-webkit-scrollbar-button:start:increment,
-	.horaires-content::-webkit-scrollbar-button:end:decrement {
-		height: 0;
-		width: 0;
-		background: transparent;
-	}
-
 	.horaires-title {
 		display: block;
 		font-size: 0.8125rem;
@@ -513,6 +708,7 @@
 		color: #6b7280;
 		margin-bottom: 0.5rem;
 		padding-left: 0.25rem;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	.horaires-list {
@@ -535,17 +731,29 @@
 		cursor: pointer;
 		transition: all 150ms;
 		text-align: left;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.horaire-btn:hover {
 		border-color: #d1d5db;
-		background-color: #f3f4f6;
+		background-color: #f5ede0;
 	}
 
 	.horaire-btn.active {
-		border-color: black;
-		background-color: black;
-		color: white;
+		border-color: #1e1005;
+		background-color: #1e1005;
+		color: #fbf0da;
+	}
+
+	.horaire-btn.indispo {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.horaire-btn.indispo:hover {
+		background-color: white;
+		border-color: #e5e7eb;
 	}
 
 	.dot {
@@ -557,9 +765,22 @@
 	}
 
 	.horaire-btn.active .dot {
-		background-color: white;
+		background-color: #fbf0da;
 	}
 
+	.dot-complet {
+		background-color: #ef4444 !important;
+	}
+
+	.tag-complet {
+		margin-left: auto;
+		font-size: 0.6875rem;
+		font-family: 'Aeonik', sans-serif;
+		color: #ef4444;
+		font-weight: 500;
+	}
+
+	/* ── Calendar ─────────────────────────────────────────────────── */
 	:global([data-calendar-root]) {
 		width: 100%;
 		padding: 0 0.5rem;
@@ -589,12 +810,13 @@
 
 	:global([data-calendar-prev-button]:hover),
 	:global([data-calendar-next-button]:hover) {
-		background-color: #f3f4f6;
+		background-color: #f5ede0;
 	}
 
 	:global([data-calendar-heading]) {
 		font-size: 0.9375rem;
 		font-weight: 500;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	:global([data-calendar-grid]) {
@@ -609,6 +831,7 @@
 		font-weight: 400;
 		padding-bottom: 0.5rem;
 		width: calc(100% / 7);
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	:global([data-calendar-grid-row]) {
@@ -638,23 +861,24 @@
 		background: none;
 		cursor: pointer;
 		transition: all 150ms;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	:global([data-calendar-day]:hover) {
 		border-color: #d1d5db;
-		background-color: #f3f4f6;
+		background-color: #f5ede0;
 	}
 
 	:global([data-calendar-day][data-selected]) {
-		background-color: black;
-		color: white;
-		border-color: black;
+		background-color: #1e1005;
+		color: #fbf0da;
+		border-color: #1e1005;
 		font-weight: 500;
 	}
 
 	:global([data-calendar-day][data-today]) {
 		font-weight: 600;
-		border-color: #d1d5db;
+		border-color: #bab2a2;
 	}
 
 	:global([data-calendar-day][data-outside-month]) {
@@ -667,13 +891,7 @@
 		pointer-events: none;
 	}
 
-	.field-group-fieldset {
-		border: none;
-		margin: 0;
-		padding: 0;
-		min-width: 0;
-	}
-
+	/* ── Réserver button ──────────────────────────────────────────── */
 	.reserver-wrapper {
 		margin-top: auto;
 		padding: 1rem;
@@ -683,22 +901,32 @@
 	.reserver-btn {
 		width: 100%;
 		padding: 0.75rem;
-		background-color: white;
-		color: #7f1d1d;
-		border: 2px solid #e5e7eb;
+		background-color: #7f1d1d;
+		color: white;
+		border: none;
 		border-radius: 0.5rem;
 		font-size: 0.9375rem;
 		font-weight: 600;
 		cursor: pointer;
-		transition: border-color 150ms;
+		transition: background-color 150ms;
+		font-family: 'Aeonik', sans-serif;
+		letter-spacing: 0.05em;
 	}
 
 	.reserver-btn:hover {
-		border-color: #7f1d1d;
+		background-color: #6b1919;
+	}
+
+	/* ── Form / recap ─────────────────────────────────────────────── */
+	.field-group-fieldset {
+		border: none;
+		margin: 0;
+		padding: 0;
+		min-width: 0;
 	}
 
 	.recap-block {
-		background-color: #f3f4f6;
+		background-color: #f9f3ea;
 		border-bottom: 1px solid #e5e7eb;
 		flex-shrink: 0;
 	}
@@ -713,16 +941,19 @@
 	.form-title {
 		font-size: 1.0625rem;
 		font-weight: 600;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.modifier-btn {
 		background: none;
 		border: none;
 		font-size: 0.875rem;
-		color: #374151;
+		color: #7f1d1d;
 		cursor: pointer;
 		text-decoration: underline;
 		padding: 0;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	.contact-header {
@@ -746,29 +977,20 @@
 	}
 
 	.back-btn:hover {
-		background-color: #f3f4f6;
+		background-color: #f5ede0;
 	}
 
 	.contact-title {
 		font-size: 1.0625rem;
 		font-weight: 600;
-	}
-
-	.recap-location {
-		display: flex;
-		flex-direction: column;
-		gap: 0.125rem;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.recap-location-name {
 		font-weight: 600;
 		font-size: 0.875rem;
-	}
-
-	.recap-location-addr {
-		font-size: 0.75rem;
-		color: #6b7280;
-		font-weight: 400;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	.recap {
@@ -785,6 +1007,7 @@
 		font-size: 0.875rem;
 		font-weight: 500;
 		color: #374151;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	.form-scroll {
@@ -807,15 +1030,6 @@
 		border-radius: 99px;
 	}
 
-	.form-scroll::-webkit-scrollbar-button:start:decrement,
-	.form-scroll::-webkit-scrollbar-button:end:increment,
-	.form-scroll::-webkit-scrollbar-button:start:increment,
-	.form-scroll::-webkit-scrollbar-button:end:decrement {
-		height: 0;
-		width: 0;
-		background: transparent;
-	}
-
 	.form {
 		display: flex;
 		flex-direction: column;
@@ -833,6 +1047,8 @@
 	.field-label {
 		font-size: 0.875rem;
 		font-weight: 600;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.facultatif {
@@ -855,10 +1071,12 @@
 		box-sizing: border-box;
 		outline: none;
 		transition: border-color 150ms;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.field-input:focus {
-		border-color: #9ca3af;
+		border-color: #bab2a2;
 	}
 
 	.phone-input {
@@ -878,6 +1096,7 @@
 		background-color: #f9fafb;
 		border-right: 1px solid #e5e7eb;
 		white-space: nowrap;
+		font-family: 'Aeonik', sans-serif;
 	}
 
 	.phone-field {
@@ -893,12 +1112,13 @@
 		font-size: 0.875rem;
 		resize: none;
 		outline: none;
-		font-family: inherit;
+		font-family: 'Aeonik', sans-serif;
 		transition: border-color 150ms;
+		color: #1e1005;
 	}
 
 	.field-textarea:focus {
-		border-color: #9ca3af;
+		border-color: #bab2a2;
 	}
 
 	.radio-group {
@@ -912,6 +1132,8 @@
 		gap: 0.375rem;
 		font-size: 0.875rem;
 		cursor: pointer;
+		font-family: 'Aeonik', sans-serif;
+		color: #1e1005;
 	}
 
 	.checkboxes {
@@ -927,11 +1149,24 @@
 		font-size: 0.8125rem;
 		cursor: pointer;
 		line-height: 1.4;
+		font-family: 'Aeonik', sans-serif;
+		color: #374151;
 	}
 
 	.required {
-		color: #ef4444;
+		color: #7f1d1d;
 		font-weight: 600;
+	}
+
+	.error-msg {
+		color: #b91c1c;
+		font-size: 0.8125rem;
+		font-family: 'Aeonik', sans-serif;
+		margin: 0;
+		padding: 0.5rem 0.75rem;
+		background-color: #fef2f2;
+		border-radius: 0.375rem;
+		border: 1px solid #fecaca;
 	}
 
 	.submit-btn {
@@ -946,9 +1181,57 @@
 		cursor: pointer;
 		margin-top: 0.5rem;
 		transition: background-color 150ms;
+		font-family: 'Aeonik', sans-serif;
+		letter-spacing: 0.05em;
 	}
 
 	.submit-btn:hover {
 		background-color: #6b1919;
+	}
+
+	.submit-btn:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	/* ── Succès ───────────────────────────────────────────────────── */
+	.success-block {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		flex: 1;
+		gap: 1rem;
+		padding: 2.5rem 1.5rem;
+		text-align: center;
+	}
+
+	.success-icon {
+		display: inline-flex;
+		width: 3.5rem;
+		height: 3.5rem;
+		align-items: center;
+		justify-content: center;
+		background-color: #dcfce7;
+		color: #16a34a;
+		border-radius: 50%;
+		font-size: 1.5rem;
+		font-weight: 700;
+	}
+
+	.success-block h3 {
+		font-family: 'Britney', sans-serif;
+		font-size: 1.5rem;
+		font-weight: 400;
+		color: #1e1005;
+		margin: 0;
+	}
+
+	.success-block p {
+		font-family: 'Aeonik', sans-serif;
+		font-size: 0.9375rem;
+		color: #5a4a3a;
+		line-height: 1.6;
+		margin: 0;
 	}
 </style>
