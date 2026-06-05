@@ -43,7 +43,7 @@
 		const dateStr = dateValue.toString();
 		let annule = false;
 
-		fetch(`http://localhost:8000/availability/${dateStr}`)
+		fetch(`/api/availability/${dateStr}`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then((data) => {
 				if (!annule) availability = data;
@@ -114,7 +114,7 @@
 
 		submitting = true;
 		try {
-			const res = await fetch('http://localhost:8000/reservations/', {
+			const res = await fetch('/api/reservations', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
