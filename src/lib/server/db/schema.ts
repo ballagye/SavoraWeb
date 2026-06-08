@@ -17,7 +17,9 @@ import {
 
 export const mealPeriodEnum        = pgEnum('mealperiod',         ['lunch', 'dinner']);
 export const reservationStatusEnum = pgEnum('reservationstatus',  ['pending', 'confirmed', 'refused', 'cancelled']);
-export const civilityEnum          = pgEnum('civility',           ['Madame', 'Monsieur', 'Mx.']);
+// Labels réels en base (noms d'énumération SQLAlchemy, en minuscules).
+// L'affichage "Madame"/"Monsieur"/"Mx." est géré dans les routes (mapping).
+export const civilityEnum          = pgEnum('civility',           ['madame', 'monsieur', 'mx']);
 
 export const reservations = pgTable('reservations', {
 	id:               serial('id').primaryKey(),
@@ -39,6 +41,18 @@ export const reservations = pgTable('reservations', {
 	staffNote:        text('staff_note')
 });
 
+export const clients = pgTable('clients', {
+	id:         serial('id').primaryKey(),
+	createdAt:  timestamp('created_at', { withTimezone: true }).defaultNow(),
+	updatedAt:  timestamp('updated_at', { withTimezone: true }),
+	civility:   civilityEnum('civility').notNull(),
+	firstName:  varchar('first_name', { length: 100 }).notNull(),
+	lastName:   varchar('last_name', { length: 100 }).notNull(),
+	phone:      varchar('phone', { length: 20 }).notNull(),
+	email:      varchar('email', { length: 200 }).notNull().unique(),
+	notes:      text('notes')
+});
+
 export const dailyQuotas = pgTable('daily_quotas', {
 	id:        serial('id').primaryKey(),
 	date:      date('date').notNull(),
@@ -48,3 +62,5 @@ export const dailyQuotas = pgTable('daily_quotas', {
 
 export type Reservation    = typeof reservations.$inferSelect;
 export type NewReservation = typeof reservations.$inferInsert;
+export type Client         = typeof clients.$inferSelect;
+export type NewClient      = typeof clients.$inferInsert;

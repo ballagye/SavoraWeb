@@ -343,11 +343,13 @@
 			{#if submitDone}
 				<div class="success-block">
 					<span class="success-icon">✓</span>
-					<h3>Réservation envoyée !</h3>
+					<h3>Demande enregistrée !</h3>
 					<p>
-						Nous avons bien reçu votre demande pour le <strong>{formatDate(dateValue)}</strong> à
-						<strong>{selectedHoraire}</strong>.<br />
-						Un email de confirmation vous sera adressé dans les plus brefs délais.
+						Votre demande pour le <strong>{formatDate(dateValue)}</strong> à
+						<strong>{selectedHoraire}</strong> ({nombreCouverts} couvert{nombreCouverts > 1 ? 's' : ''})
+						a bien été enregistrée.<br />
+						Elle est <strong>en attente de validation</strong> par notre équipe. Pour toute
+						modification, contactez-nous directement au restaurant.
 					</p>
 					<button
 						class="reserver-btn"

@@ -1,18 +1,27 @@
 /**
  * GET /api/availability/[date]
- * Proxy vers FastAPI — retourne les places restantes midi/soir pour une date.
+ * Calcule les places restantes midi/soir pour une date,
+ * directement en base PostgreSQL via Drizzle ORM (sans proxy FastAPI).
  */
+import { json } from '@sveltejs/kit';
 import type { RequestEvent } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-
-const API = env.API_URL ?? 'http://localhost:8000';
+import { maxCovers, reservedCovers } from '$lib/server/db/queries';
 
 export const GET = async ({ params }: RequestEvent) => {
-	const res = await fetch(`${API}/availability/${params.date}`);
+	const date = params.date!;
 
-	const text = await res.text();
-	return new Response(text, {
-		status: res.status,
-		headers: { 'Content-Type': 'application/json' }
+	const [lunchMax, dinnerMax, lunchRes, dinnerRes] = await Promise.all([
+		maxCovers(date, 'lunch'),
+		maxCovers(date, 'dinner'),
+		reservedCovers(date, 'lunch'),
+		reservedCovers(date, 'dinner')
+	]);
+
+	return json({
+		date,
+		lunch_available: lunchRes < lunchMax,
+		dinner_available: dinnerRes < dinnerMax,
+		lunch_remaining: Math.max(0, lunchMax - lunchRes),
+		dinner_remaining: Math.max(0, dinnerMax - dinnerRes)
 	});
 };
